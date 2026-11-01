@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="pt-br">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Espelho TV</title>
+    <style>
+        html,
+        body {
+            margin: 0;
+            height: 100%;
+            background: #000;
+            color: #fff;
+            font-family: Arial, Helvetica, sans-serif;
+            overflow: hidden
+        }
+
+        #login {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%
+        }
+
+        #login h1 {
+            font-size: 40px;
+            margin: 0 0 8px
+        }
+
+        #login p {
+            font-size: 22px;
+            color: #aaa;
+            margin: 0 0 28px
+        }
+
+        #pin {
+            font-size: 44px;
+            width: 7em;
+            text-align: center;
+            letter-spacing: .35em;
+            padding: 10px;
+            border-radius: 10px;
+            border: 3px solid #2962ff;
+            background: #111;
+            color: #fff;
+            outline: none
+        }
+
+        #go {
+            margin-top: 24px;
+            font-size: 28px;
+            padding: 12px 44px;
+            border: 0;
+            border-radius: 10px;
+            background: #2962ff;
+            color: #fff
+        }
+
+        #go:focus {
+            outline: 4px solid #fff
+        }
+
+        #err {
+            margin-top: 18px;
+            min-height: 32px;
+            font-size: 24px;
+            color: #ff6b6b
+        }
+
+        #player {
+            display: none;
+            position: fixed;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            background: #000
+        }
+
+        #note {
+            position: fixed;
+            left: 16px;
+            bottom: 12px;
+            font-size: 18px;
+            color: #888
+        }
+    </style>
+</head>
+
+<body>
+    <div id="login">
+        <h1>Espelho TV</h1>
+        <p>Digite o PIN mostrado no celular</p>
+        <form id="form" autocomplete="off">
+            <input id="pin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autofocus>
+            <div style="text-align:center"><button id="go" type="submit">Entrar</button></div>
+        </form>
+        <div id="err"></div>
+    </div>
+    <img id="player" alt="">
+    <div id="note"></div>
+
+    <script>
+        (function () {
+            var $ = function (id) { return document.getElementById(id); };
+            var token = null, audioCtx = null, nextTime = 0, imgErrors = 0;
+
+            function note(t) {
+                var el = $('note');
+                el.textContent = t || '';
+                if (t) setTimeout(function () { if (el.textContent === t) el.textContent = ''; }, 6000);
+            }
+
+            $('form').addEventListener('submit', function (e) {
+                e.preventDefault();
+                var pin = $('pin').value.replace(/\D/g, '');
+                if (pin.length < 4) { $('err').textContent = 'Digite o PIN completo.'; return; }
+
+                // O AudioContext precisa ser criado dentro de um gesto do usuário (este clique/Enter).
+                try {
+                    var AC = window.AudioContext || window.webkitAudioContext;
+                    if (AC && !audioCtx) audioCtx = new AC();
+                    if (audioCtx && audioCtx.resume) audioCtx.resume();
+                } catch (x) { }
+
+                $('err').textContent = 'Verificando...';
+                var xhr = new XMLHttpRequest();
+                xhr.open('POST', '/auth');
+                xhr.onload = function () {
+                    var r = {};
+                    try { r = JSON.parse(xhr.responseText); } catch (x) { }
+                    if (xhr.status === 200) { token = r.t; showPlayer(r); }
+                    else if (xhr.status === 429) { $('err').textContent = 'Muitas tentativas. Aguarde ' + (r.wait || 60) + ' s.'; }
+                    else { $('err').textContent = 'PIN incorreto.'; $('pin').value = ''; }
+                };
+                xhr.onerror = function () { $('err').textContent = 'Sem conexão com o celular.'; };
+                xhr.send(pin);
+            });
+
+            function showPlayer(r) {
+                $('login').style.display = 'none';
+                var img = $('player');
+                img.style.display = 'block';
+                img.onload = function () { imgErrors = 0; };
+                img.onerror = function () {
+                    imgErrors++;
+                    if (imgErrors > 5) { location.reload(); return; }
+                    note('Reconectando...');
+                    setTimeout(function () { img.src = '/stream?t=' + token + '&r=' + Date.now(); }, 1500);
+                };
+                img.src = '/stream?t=' + token;
+                if (r.audio) startAudio(r.ch, r.rate);
+                else note('Sem áudio nesta transmissão.');
+            }
+
+            // Clique/OK no controle: tela cheia on/off.
+            document.addEventListener('click', function () {
+                if (!token) return;
+                if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+                var d = document, el = d.documentElement;
+                if (d.fullscreenElement || d.webkitFullscreenElement) {
+                    (d.exitFullscreen || d.webkitExitFullscreen).call(d);
+                } else {
+                    var f = el.requestFullscreen || el.webkitRequestFullscreen;
+                    if (f) f.call(el);
+                }
+            });
+
+            // ---------- Áudio: PCM 16 bits entrelaçado, recebido por fetch e tocado com Web Audio ----------
+
+            function startAudio(ch, rate) {
+                if (!audioCtx || !window.fetch || !window.ReadableStream) {
+                    note('Este navegador não toca o áudio ao vivo.');
+                    return;
+                }
+                connectAudio(ch, rate);
+            }
+
+            async function connectAudio(ch, rate) {
+                try {
+                    var res = await fetch('/audio?t=' + token);
+                    if (res.status === 401) { location.reload(); return; }
+                    if (!res.ok || !res.body) throw new Error('audio');
+                    var reader = res.body.getReader();
+                    var left = new Uint8Array(0);
+                    nextTime = 0;
+                    while (true) {
+                        var s = await reader.read();
+                        if (s.done) break;
+                        left = playChunk(join(left, s.value), ch, rate);
+                    }
+                } catch (x) { }
+                setTimeout(function () { connectAudio(ch, rate); }, 2000);
+            }
+
+            // Junta dois blocos em um novo array (offset 0, necessário para o Int16Array).
+            function join(a, b) {
+                var out = new Uint8Array(a.length + b.length);
+                out.set(a, 0);
+                out.set(b, a.length);
+                return out;
+            }
+
+            function playChunk(buf, ch, rate) {
+                var frameBytes = 2 * ch;
+                var usable = buf.length - (buf.length % frameBytes);
+                if (usable > 0) {
+                    var samples = new Int16Array(buf.buffer, buf.byteOffset, usable / 2);
+                    var frames = usable / frameBytes;
+                    var ab = audioCtx.createBuffer(ch, frames, rate);
+                    for (var c = 0; c < ch; c++) {
+                        var d = ab.getChannelData(c);
+                        for (var i = 0; i < frames; i++) d[i] = samples[i * ch + c] / 32768;
+                    }
+                    var now = audioCtx.currentTime;
+                    if (nextTime < now + 0.03) nextTime = now + 0.15;   // início ou recuperação de falha
+                    if (nextTime - now < 0.8) {                         // se acumular atraso demais, descarta
+                        var src = audioCtx.createBufferSource();
+                        src.buffer = ab;
+                        src.connect(audioCtx.destination);
+                        src.start(nextTime);
+                        nextTime += ab.duration;
+                    }
+                }
+                return buf.slice(usable);
+            }
+        })();
+    </script>
+</body>
+
+</html>

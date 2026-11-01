@@ -1,0 +1,20 @@
+name: espelho_tv
+description: Espelha a tela do celular Android na TV pelo navegador, via Wi-Fi, com PIN e áudio.
+publish_to: "none"
+version: 1.1.0+2
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  shared_preferences: ^2.2.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
