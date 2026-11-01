@@ -29,20 +29,22 @@ import android.view.WindowManager
 import java.io.BufferedReader
 import java.io.ByteArrayOutputStream
 import java.io.OutputStream
+import java.io.RandomAccessFile
 import java.net.BindException
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.URLDecoder
 import java.util.Collections
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 
 /**
- * Serviço em primeiro plano que:
- *  - captura a tela (MediaProjection) e a envia como MJPEG;
- *  - captura o áudio interno (AudioPlaybackCapture, Android 10+) e o envia como PCM;
- *  - protege tudo com PIN (veja AccessControl).
+ * Serviço em primeiro plano que serve, por HTTP na rede local e protegido por PIN:
+ *  - a tela do celular (MediaProjection -> MJPEG), opcional;
+ *  - o áudio interno (AudioPlaybackCapture, Android 10+), opcional;
+ *  - a biblioteca de filmes do app (arquivos com suporte a Range, para avançar/voltar).
  * A TV só precisa abrir http://IP_DO_CELULAR:PORTA no navegador.
  */
 class ScreenService : Service() {
@@ -57,6 +59,7 @@ class ScreenService : Service() {
         const val EXTRA_MAX_WIDTH = "maxWidth"
         const val EXTRA_PIN = "pin"
         const val EXTRA_AUDIO = "audio"
+        const val EXTRA_SCREEN = "screen"
         const val CHANNEL_ID = "espelho_tv_channel"
         const val NOTIFICATION_ID = 4711
 
@@ -66,6 +69,10 @@ class ScreenService : Service() {
 
         @Volatile
         var running = false
+
+        /** true = espelhando a tela; false = só servindo a biblioteca de filmes. */
+        @Volatile
+        var screenMode = true
 
         @Volatile
         var audioActive = false
@@ -132,17 +139,21 @@ class ScreenService : Service() {
                 quality = intent.getIntExtra(EXTRA_QUALITY, 60)
                 maxWidth = intent.getIntExtra(EXTRA_MAX_WIDTH, 960)
                 val wantAudio = intent.getBooleanExtra(EXTRA_AUDIO, false)
+                val screen = intent.getBooleanExtra(EXTRA_SCREEN, true)
                 val pin = intent.getStringExtra(EXTRA_PIN) ?: ""
                 val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, 0)
                 @Suppress("DEPRECATION")
                 val data: Intent? = intent.getParcelableExtra(EXTRA_DATA)
 
-                // Sem PIN válido ou sem permissão de captura, não transmite.
-                if (data == null || !Regex("^[0-9]{4,8}$").matches(pin)) {
+                // Sem PIN válido, ou sem permissão de captura quando espelhando, não transmite.
+                if ((screen && data == null) || !Regex("^[0-9]{4,8}$").matches(pin)) {
+                    // O Android exige startForeground após startForegroundService.
+                    startForegroundCompat(false)
                     stopEverything()
                     return START_NOT_STICKY
                 }
 
+                screenMode = screen
                 access = AccessControl(pin)
                 pageBytes = try {
                     assets.open("player.html").use { it.readBytes() }
@@ -150,9 +161,11 @@ class ScreenService : Service() {
                     "<h1>player.html ausente</h1>".toByteArray()
                 }
 
-                startForegroundCompat()
-                startCapture(resultCode, data)
-                if (wantAudio) startAudioCapture()
+                startForegroundCompat(screen)
+                if (screen && data != null) {
+                    startCapture(resultCode, data)
+                    if (wantAudio) startAudioCapture()
+                }
                 startServer()
                 running = true
             }
@@ -162,11 +175,11 @@ class ScreenService : Service() {
 
     // ---------- Notificação ----------
 
-    private fun startForegroundCompat() {
+    private fun startForegroundCompat(screen: Boolean) {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             nm.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "Espelhamento de tela", NotificationManager.IMPORTANCE_LOW)
+                NotificationChannel(CHANNEL_ID, "Transmissão para a TV", NotificationManager.IMPORTANCE_LOW)
             )
         }
         val stopIntent = Intent(this, ScreenService::class.java).setAction(ACTION_STOP)
@@ -186,7 +199,7 @@ class ScreenService : Service() {
             @Suppress("DEPRECATION") Notification.Builder(this)
 
         val notification = builder
-            .setContentTitle("Espelhando a tela na TV")
+            .setContentTitle(if (screen) "Espelhando a tela na TV" else "Servindo filmes para a TV")
             .setContentText("Toque para abrir o app ou use Parar")
             .setSmallIcon(android.R.drawable.ic_media_play)
             .setContentIntent(openPending)
@@ -198,10 +211,11 @@ class ScreenService : Service() {
             .build()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                NOTIFICATION_ID, notification,
+            val type = if (screen)
                 android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-            )
+            else
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+            startForeground(NOTIFICATION_ID, notification, type)
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
@@ -409,6 +423,7 @@ class ScreenService : Service() {
             val target = parts.getOrNull(1) ?: "/"
 
             var contentLength = 0
+            var range: String? = null
             var headerCount = 0
             while (true) {
                 val line = input.readLine() ?: break
@@ -417,6 +432,8 @@ class ScreenService : Service() {
                 if (headerCount > 64) return
                 if (line.startsWith("content-length:", ignoreCase = true)) {
                     contentLength = line.substringAfter(':').trim().toIntOrNull() ?: 0
+                } else if (line.startsWith("range:", ignoreCase = true)) {
+                    range = line.substringAfter(':').trim()
                 }
             }
 
@@ -438,7 +455,9 @@ class ScreenService : Service() {
 
                 method == "GET" && path == "/stream" -> {
                     if (!authorized(query)) {
-                        respond(out, 401, "Unauthorized", "text/plain", ByteArray(0))
+                        deny(out)
+                    } else if (!screenMode) {
+                        respond(out, 404, "Not Found", "text/plain", ByteArray(0))
                     } else {
                         socket.soTimeout = 0
                         streamMjpeg(out)
@@ -447,10 +466,23 @@ class ScreenService : Service() {
 
                 method == "GET" && path == "/audio" -> {
                     if (!authorized(query)) {
-                        respond(out, 401, "Unauthorized", "text/plain", ByteArray(0))
+                        deny(out)
                     } else {
                         socket.soTimeout = 0
                         streamAudio(out)
+                    }
+                }
+
+                method == "GET" && path == "/library" -> {
+                    if (!authorized(query)) deny(out) else serveLibrary(out)
+                }
+
+                method == "GET" && path == "/video" -> {
+                    if (!authorized(query)) {
+                        deny(out)
+                    } else {
+                        socket.soTimeout = 0
+                        streamVideo(out, query, range)
                     }
                 }
 
@@ -478,12 +510,17 @@ class ScreenService : Service() {
         return String(buf, 0, read)
     }
 
-    private fun authorized(query: String): Boolean {
-        val token = query.split('&')
+    private fun queryParam(query: String, key: String): String? =
+        query.split('&')
             .map { it.split('=', limit = 2) }
-            .firstOrNull { it[0] == "t" }
+            .firstOrNull { it[0] == key }
             ?.getOrNull(1)
-        return access?.isValid(token) == true
+
+    private fun authorized(query: String): Boolean =
+        access?.isValid(queryParam(query, "t")) == true
+
+    private fun deny(out: OutputStream) {
+        respond(out, 401, "Unauthorized", "text/plain", ByteArray(0))
     }
 
     private fun handleAuth(out: OutputStream, ip: String, attempt: String) {
@@ -494,7 +531,7 @@ class ScreenService : Service() {
         }
         when (val r = ac.login(ip, attempt.trim())) {
             is AccessControl.Result.Ok -> {
-                val json = "{\"t\":\"${r.token}\",\"audio\":$audioActive," +
+                val json = "{\"t\":\"${r.token}\",\"audio\":$audioActive,\"screen\":$screenMode," +
                     "\"rate\":$AUDIO_RATE,\"ch\":$AUDIO_CHANNELS}"
                 respond(out, 200, "OK", "application/json", json.toByteArray())
             }
@@ -517,6 +554,106 @@ class ScreenService : Service() {
     private fun servePage(out: OutputStream) {
         respond(out, 200, "OK", "text/html; charset=utf-8", pageBytes)
     }
+
+    // ---------- Biblioteca de filmes ----------
+
+    private fun jsonString(s: String): String {
+        val sb = StringBuilder("\"")
+        for (c in s) {
+            when {
+                c == '"' -> sb.append("\\\"")
+                c == '\\' -> sb.append("\\\\")
+                c < ' ' -> sb.append(String.format("\\u%04x", c.code))
+                else -> sb.append(c)
+            }
+        }
+        sb.append('"')
+        return sb.toString()
+    }
+
+    private fun serveLibrary(out: OutputStream) {
+        val sb = StringBuilder("{\"files\":[")
+        LibraryStore.list(this).forEachIndexed { i, f ->
+            if (i > 0) sb.append(',')
+            sb.append("{\"n\":").append(jsonString(f.name))
+                .append(",\"s\":").append(f.length()).append('}')
+        }
+        sb.append("]}")
+        respond(out, 200, "OK", "application/json; charset=utf-8", sb.toString().toByteArray(Charsets.UTF_8))
+    }
+
+    /** Entrega o arquivo de vídeo, com suporte a "Range" (necessário para avançar e voltar). */
+    private fun streamVideo(out: OutputStream, query: String, range: String?) {
+        val name = queryParam(query, "f")?.let { URLDecoder.decode(it, "UTF-8") }
+        val file = if (name == null) null else LibraryStore.find(this, name)
+        if (file == null) {
+            respond(out, 404, "Not Found", "text/plain", ByteArray(0))
+            return
+        }
+
+        val total = file.length()
+        var start = 0L
+        var end = total - 1
+        var partial = false
+
+        if (range != null && range.startsWith("bytes=")) {
+            val spec = range.removePrefix("bytes=").substringBefore(',').trim()
+            val a = spec.substringBefore('-')
+            val b = spec.substringAfter('-', "")
+            if (a.isEmpty()) {
+                // "bytes=-N": os últimos N bytes
+                val n = b.toLongOrNull()
+                if (n != null && n > 0) {
+                    start = maxOf(0L, total - n)
+                    partial = true
+                }
+            } else {
+                val s = a.toLongOrNull()
+                if (s != null) {
+                    start = s
+                    if (b.isNotEmpty()) {
+                        val e = b.toLongOrNull()
+                        if (e != null) end = minOf(e, total - 1)
+                    }
+                    partial = true
+                }
+            }
+            if (partial && (start >= total || start > end)) {
+                out.write(
+                    ("HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */$total\r\n" +
+                        "Content-Length: 0\r\nConnection: close\r\n\r\n").toByteArray()
+                )
+                out.flush()
+                return
+            }
+        }
+
+        val length = end - start + 1
+        val header = StringBuilder()
+        header.append(if (partial) "HTTP/1.1 206 Partial Content\r\n" else "HTTP/1.1 200 OK\r\n")
+        header.append("Content-Type: ").append(LibraryStore.mimeOf(file)).append("\r\n")
+        header.append("Accept-Ranges: bytes\r\n")
+        header.append("Content-Length: ").append(length).append("\r\n")
+        if (partial) header.append("Content-Range: bytes ").append(start).append('-')
+            .append(end).append('/').append(total).append("\r\n")
+        header.append("Connection: close\r\n\r\n")
+        out.write(header.toString().toByteArray())
+
+        RandomAccessFile(file, "r").use { raf ->
+            raf.seek(start)
+            val buf = ByteArray(64 * 1024)
+            var remaining = length
+            while (remaining > 0 && running) {
+                val n = raf.read(buf, 0, minOf(buf.size.toLong(), remaining).toInt())
+                if (n < 0) break
+                out.write(buf, 0, n)
+                remaining -= n
+            }
+            out.flush()
+        }
+    }
+
+    // ---------- Tela e áudio ao vivo ----------
 
     private fun streamMjpeg(out: OutputStream) {
         out.write(

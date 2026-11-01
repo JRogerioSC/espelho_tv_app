@@ -16,20 +16,29 @@
             overflow: hidden
         }
 
-        #login {
+        .screen {
+            display: none;
+            position: fixed;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            box-sizing: border-box
+        }
+
+        .center {
             display: flex;
             flex-direction: column;
             align-items: center;
-            justify-content: center;
-            height: 100%
+            justify-content: center
         }
 
-        #login h1 {
+        h1 {
             font-size: 40px;
             margin: 0 0 8px
         }
 
-        #login p {
+        p.sub {
             font-size: 22px;
             color: #aaa;
             margin: 0 0 28px
@@ -48,18 +57,27 @@
             outline: none
         }
 
-        #go {
-            margin-top: 24px;
-            font-size: 28px;
-            padding: 12px 44px;
-            border: 0;
-            border-radius: 10px;
-            background: #2962ff;
-            color: #fff
+        button {
+            font-family: inherit
         }
 
-        #go:focus {
+        .btn {
+            font-size: 28px;
+            padding: 14px 44px;
+            border: 0;
+            border-radius: 12px;
+            background: #2962ff;
+            color: #fff;
+            cursor: pointer
+        }
+
+        .btn:focus,
+        .item:focus {
             outline: 4px solid #fff
+        }
+
+        .btn.alt {
+            background: #333
         }
 
         #err {
@@ -69,14 +87,67 @@
             color: #ff6b6b
         }
 
-        #player {
-            display: none;
-            position: fixed;
-            left: 0;
-            top: 0;
+        #menu .btn {
+            display: block;
+            width: 420px;
+            margin: 12px 0
+        }
+
+        #lib {
+            padding: 32px 48px;
+            overflow: auto
+        }
+
+        #lib header {
+            display: flex;
+            align-items: center;
+            gap: 24px;
+            margin-bottom: 20px
+        }
+
+        #lib h2 {
+            margin: 0;
+            font-size: 34px
+        }
+
+        .item {
+            display: block;
+            width: 100%;
+            text-align: left;
+            font-size: 26px;
+            padding: 16px 20px;
+            margin: 8px 0;
+            border: 0;
+            border-radius: 10px;
+            background: #1a1a1a;
+            color: #fff;
+            cursor: pointer
+        }
+
+        .item small {
+            display: block;
+            color: #888;
+            font-size: 18px;
+            margin-top: 4px
+        }
+
+        #empty {
+            font-size: 24px;
+            color: #aaa;
+            line-height: 1.5;
+            display: none
+        }
+
+        #mirror img {
             width: 100%;
             height: 100%;
             object-fit: contain;
+            background: #000
+        }
+
+        #movie video {
+            width: 100%;
+            height: 100%;
             background: #000
         }
 
@@ -85,28 +156,71 @@
             left: 16px;
             bottom: 12px;
             font-size: 18px;
-            color: #888
+            color: #bbb;
+            z-index: 9
+        }
+
+        #hint {
+            position: fixed;
+            right: 16px;
+            top: 12px;
+            font-size: 16px;
+            color: #777;
+            z-index: 9
         }
     </style>
 </head>
 
 <body>
-    <div id="login">
+
+    <div id="login" class="screen center">
         <h1>Espelho TV</h1>
-        <p>Digite o PIN mostrado no celular</p>
+        <p class="sub">Digite o PIN mostrado no celular</p>
         <form id="form" autocomplete="off">
             <input id="pin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autofocus>
-            <div style="text-align:center"><button id="go" type="submit">Entrar</button></div>
+            <div style="text-align:center;margin-top:24px"><button class="btn" type="submit">Entrar</button></div>
         </form>
         <div id="err"></div>
     </div>
-    <img id="player" alt="">
+
+    <div id="menu" class="screen center">
+        <h1>O que você quer ver?</h1>
+        <p class="sub">&nbsp;</p>
+        <button id="goMirror" class="btn">Espelhar a tela do celular</button>
+        <button id="goLib" class="btn alt">Filmes</button>
+    </div>
+
+    <div id="lib" class="screen">
+        <header>
+            <button id="libBack" class="btn alt" style="font-size:22px;padding:10px 26px">&larr; Voltar</button>
+            <h2>Filmes</h2>
+        </header>
+        <div id="list"></div>
+        <div id="empty">Nenhum filme ainda.<br>No celular, abra o app, vá na aba <b>Filmes</b> e toque em <b>Adicionar
+                filmes</b>.</div>
+    </div>
+
+    <div id="mirror" class="screen"><img id="img" alt=""></div>
+    <div id="movie" class="screen"><video id="video" controls autoplay playsinline></video></div>
+
+    <div id="hint"></div>
     <div id="note"></div>
 
     <script>
         (function () {
             var $ = function (id) { return document.getElementById(id); };
-            var token = null, audioCtx = null, nextTime = 0, imgErrors = 0;
+            var token = null, info = {}, audioCtx = null, nextTime = 0;
+            var audioAbort = null, mirrorOn = false, imgErrors = 0, current = 'login';
+            var lastFocus = null;
+
+            var SCREENS = ['login', 'menu', 'lib', 'mirror', 'movie'];
+            function show(name) {
+                current = name;
+                SCREENS.forEach(function (s) {
+                    $(s).style.display = (s === name) ? (s === 'login' || s === 'menu' ? 'flex' : 'block') : 'none';
+                });
+                $('hint').textContent = (name === 'mirror' || name === 'movie') ? 'Voltar: tecla Voltar/Esc' : '';
+            }
 
             function note(t) {
                 var el = $('note');
@@ -114,12 +228,19 @@
                 if (t) setTimeout(function () { if (el.textContent === t) el.textContent = ''; }, 6000);
             }
 
+            function fmtSize(n) {
+                if (n >= 1073741824) return (n / 1073741824).toFixed(1) + ' GB';
+                return Math.max(1, Math.round(n / 1048576)) + ' MB';
+            }
+
+            // ---------- Login ----------
+            show('login');
             $('form').addEventListener('submit', function (e) {
                 e.preventDefault();
                 var pin = $('pin').value.replace(/\D/g, '');
                 if (pin.length < 4) { $('err').textContent = 'Digite o PIN completo.'; return; }
 
-                // O AudioContext precisa ser criado dentro de um gesto do usuário (este clique/Enter).
+                // O AudioContext precisa nascer dentro de um gesto do usuário (este clique/Enter).
                 try {
                     var AC = window.AudioContext || window.webkitAudioContext;
                     if (AC && !audioCtx) audioCtx = new AC();
@@ -132,7 +253,7 @@
                 xhr.onload = function () {
                     var r = {};
                     try { r = JSON.parse(xhr.responseText); } catch (x) { }
-                    if (xhr.status === 200) { token = r.t; showPlayer(r); }
+                    if (xhr.status === 200) { token = r.t; info = r; afterLogin(); }
                     else if (xhr.status === 429) { $('err').textContent = 'Muitas tentativas. Aguarde ' + (r.wait || 60) + ' s.'; }
                     else { $('err').textContent = 'PIN incorreto.'; $('pin').value = ''; }
                 };
@@ -140,25 +261,53 @@
                 xhr.send(pin);
             });
 
-            function showPlayer(r) {
-                $('login').style.display = 'none';
-                var img = $('player');
-                img.style.display = 'block';
+            function afterLogin() {
+                if (info.screen) { show('menu'); $('goMirror').focus(); }
+                else openLibrary();   // modo "só filmes": não há tela para espelhar
+            }
+
+            // ---------- Menu ----------
+            $('goMirror').addEventListener('click', function (e) { e.stopPropagation(); startMirror(); });
+            $('goLib').addEventListener('click', function (e) { e.stopPropagation(); openLibrary(); });
+            $('libBack').addEventListener('click', function (e) {
+                e.stopPropagation();
+                if (info.screen) { show('menu'); $('goLib').focus(); }
+            });
+            if (document.getElementById('libBack')) {
+                // No modo só-filmes não há menu para onde voltar.
+                var hideBack = function () { $('libBack').style.display = info.screen ? '' : 'none'; };
+                $('goLib').addEventListener('click', hideBack);
+                $('form').addEventListener('submit', function () { setTimeout(hideBack, 800); });
+            }
+
+            // ---------- Espelhamento ----------
+            function startMirror() {
+                show('mirror');
+                mirrorOn = true;
+                imgErrors = 0;
+                var img = $('img');
                 img.onload = function () { imgErrors = 0; };
                 img.onerror = function () {
+                    if (!mirrorOn) return;
                     imgErrors++;
                     if (imgErrors > 5) { location.reload(); return; }
                     note('Reconectando...');
-                    setTimeout(function () { img.src = '/stream?t=' + token + '&r=' + Date.now(); }, 1500);
+                    setTimeout(function () { if (mirrorOn) img.src = '/stream?t=' + token + '&r=' + Date.now(); }, 1500);
                 };
                 img.src = '/stream?t=' + token;
-                if (r.audio) startAudio(r.ch, r.rate);
+                if (info.audio) startAudio(info.ch, info.rate);
                 else note('Sem áudio nesta transmissão.');
             }
 
-            // Clique/OK no controle: tela cheia on/off.
-            document.addEventListener('click', function () {
-                if (!token) return;
+            function stopMirror() {
+                mirrorOn = false;
+                $('img').onerror = null;
+                $('img').removeAttribute('src');
+                if (audioAbort) { try { audioAbort.abort(); } catch (x) { } audioAbort = null; }
+            }
+
+            // Clique/OK: tela cheia on/off (na tela espelhada).
+            $('mirror').addEventListener('click', function () {
                 if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
                 var d = document, el = d.documentElement;
                 if (d.fullscreenElement || d.webkitFullscreenElement) {
@@ -169,8 +318,83 @@
                 }
             });
 
-            // ---------- Áudio: PCM 16 bits entrelaçado, recebido por fetch e tocado com Web Audio ----------
+            // ---------- Biblioteca ----------
+            function openLibrary() {
+                show('lib');
+                $('list').innerHTML = '<div style="font-size:24px;color:#aaa">Carregando...</div>';
+                $('empty').style.display = 'none';
+                var xhr = new XMLHttpRequest();
+                xhr.open('GET', '/library?t=' + token);
+                xhr.onload = function () {
+                    if (xhr.status === 401) { location.reload(); return; }
+                    var r = {};
+                    try { r = JSON.parse(xhr.responseText); } catch (x) { }
+                    renderList(r.files || []);
+                };
+                xhr.onerror = function () { $('list').textContent = 'Sem conexão com o celular.'; };
+                xhr.send();
+            }
 
+            function renderList(files) {
+                var box = $('list');
+                box.innerHTML = '';
+                $('empty').style.display = files.length ? 'none' : 'block';
+                files.forEach(function (f) {
+                    var b = document.createElement('button');
+                    b.className = 'item';
+                    b.textContent = f.n.replace(/\.[^.]+$/, '');
+                    var s = document.createElement('small');
+                    s.textContent = fmtSize(f.s) + ' · ' + (f.n.split('.').pop() || '').toUpperCase();
+                    b.appendChild(s);
+                    b.addEventListener('click', function (e) { e.stopPropagation(); lastFocus = b; playMovie(f.n); });
+                    box.appendChild(b);
+                });
+                var first = box.querySelector('.item');
+                if (first) first.focus();
+            }
+
+            // ---------- Reprodução de filme ----------
+            function playMovie(name) {
+                stopMirror();
+                show('movie');
+                var v = $('video');
+                v.onerror = function () {
+                    note('A TV não conseguiu reproduzir este arquivo (formato ou codec sem suporte). Tente MP4 (H.264).');
+                };
+                v.src = '/video?t=' + token + '&f=' + encodeURIComponent(name);
+                var p = v.play();
+                if (p && p.catch) p.catch(function () { });
+                v.focus();
+            }
+
+            function stopMovie() {
+                var v = $('video');
+                try { v.pause(); } catch (x) { }
+                v.removeAttribute('src');
+                try { v.load(); } catch (x) { }
+            }
+
+            // ---------- Botão Voltar (controle remoto ou teclado) ----------
+            function goBack() {
+                if (current === 'movie') {
+                    stopMovie(); show('lib');
+                    if (lastFocus) lastFocus.focus();
+                } else if (current === 'mirror') {
+                    stopMirror();
+                    if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen();
+                    show('menu'); $('goMirror').focus();
+                } else if (current === 'lib') {
+                    if (info.screen) { show('menu'); $('goLib').focus(); }
+                }
+            }
+            document.addEventListener('keydown', function (e) {
+                var k = e.key, c = e.keyCode;
+                if (k === 'Escape' || k === 'Backspace' || k === 'BrowserBack' || c === 27 || c === 8 || c === 10009 || c === 461) {
+                    if (current !== 'login') { e.preventDefault(); goBack(); }
+                }
+            });
+
+            // ---------- Áudio ao vivo (PCM 16 bits entrelaçado, via fetch + Web Audio) ----------
             function startAudio(ch, rate) {
                 if (!audioCtx || !window.fetch || !window.ReadableStream) {
                     note('Este navegador não toca o áudio ao vivo.');
@@ -180,23 +404,24 @@
             }
 
             async function connectAudio(ch, rate) {
+                if (!mirrorOn) return;
                 try {
-                    var res = await fetch('/audio?t=' + token);
+                    audioAbort = window.AbortController ? new AbortController() : null;
+                    var res = await fetch('/audio?t=' + token, audioAbort ? { signal: audioAbort.signal } : {});
                     if (res.status === 401) { location.reload(); return; }
                     if (!res.ok || !res.body) throw new Error('audio');
                     var reader = res.body.getReader();
                     var left = new Uint8Array(0);
                     nextTime = 0;
-                    while (true) {
+                    while (mirrorOn) {
                         var s = await reader.read();
                         if (s.done) break;
                         left = playChunk(join(left, s.value), ch, rate);
                     }
                 } catch (x) { }
-                setTimeout(function () { connectAudio(ch, rate); }, 2000);
+                if (mirrorOn) setTimeout(function () { connectAudio(ch, rate); }, 2000);
             }
 
-            // Junta dois blocos em um novo array (offset 0, necessário para o Int16Array).
             function join(a, b) {
                 var out = new Uint8Array(a.length + b.length);
                 out.set(a, 0);
