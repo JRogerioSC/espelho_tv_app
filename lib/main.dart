@@ -64,7 +64,8 @@ class _HomePageState extends State<HomePage>
   }
 
   static String _tamanho(num bytes) {
-    if (bytes >= 1073741824) return '${(bytes / 1073741824).toStringAsFixed(1)} GB';
+    if (bytes >= 1073741824)
+      return '${(bytes / 1073741824).toStringAsFixed(1)} GB';
     return '${max(1, (bytes / 1048576).round())} MB';
   }
 
@@ -106,7 +107,8 @@ class _HomePageState extends State<HomePage>
         });
         break;
       case 'copyProgress':
-        setState(() => _copia = Map<String, dynamic>.from(call.arguments as Map));
+        setState(
+            () => _copia = Map<String, dynamic>.from(call.arguments as Map));
         break;
       case 'copyDone':
         final a = Map<String, dynamic>.from(call.arguments as Map);
@@ -152,8 +154,10 @@ class _HomePageState extends State<HomePage>
       final rodando = await _channel.invokeMethod<bool>('isRunning') ?? false;
       final tela = await _channel.invokeMethod<bool>('screenActive') ?? true;
       final ip = await _channel.invokeMethod<String>('getIp');
-      final suporta = await _channel.invokeMethod<bool>('audioSupported') ?? false;
-      final audioAtivo = await _channel.invokeMethod<bool>('audioActive') ?? false;
+      final suporta =
+          await _channel.invokeMethod<bool>('audioSupported') ?? false;
+      final audioAtivo =
+          await _channel.invokeMethod<bool>('audioActive') ?? false;
       if (!mounted) return;
       setState(() {
         _transmitindo = rodando;
@@ -194,11 +198,16 @@ class _HomePageState extends State<HomePage>
       context: context,
       builder: (c) => AlertDialog(
         title: const Text('Excluir filme?'),
-        content: Text('"$nome" será apagado do app. O arquivo original que você '
-            'escolheu na galeria não é afetado.'),
+        content:
+            Text('"$nome" será apagado do app. O arquivo original que você '
+                'escolheu na galeria não é afetado.'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancelar')),
-          FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('Excluir')),
+          TextButton(
+              onPressed: () => Navigator.pop(c, false),
+              child: const Text('Cancelar')),
+          FilledButton(
+              onPressed: () => Navigator.pop(c, true),
+              child: const Text('Excluir')),
         ],
       ),
     );
@@ -245,7 +254,8 @@ class _HomePageState extends State<HomePage>
         await Future.delayed(const Duration(milliseconds: 900));
         await _atualizarEstado();
         if (mounted && _transmitindo && !_audioAtivo) {
-          _aviso('Não foi possível capturar o áudio neste aparelho: só imagem.');
+          _aviso(
+              'Não foi possível capturar o áudio neste aparelho: só imagem.');
         }
       }
     } on PlatformException catch (e) {
@@ -311,7 +321,9 @@ class _HomePageState extends State<HomePage>
               label: Text(
                 _transmitindo
                     ? 'Parar'
-                    : (naAbaTela ? 'Iniciar espelhamento' : 'Servir filmes na TV'),
+                    : (naAbaTela
+                        ? 'Iniciar espelhamento'
+                        : 'Servir filmes na TV'),
                 style: const TextStyle(fontSize: 18),
               ),
             ),
@@ -327,7 +339,9 @@ class _HomePageState extends State<HomePage>
       children: [
         _cartaoStatus(cores),
         const SizedBox(height: 16),
-        if (_transmitindo) _cartaoEndereco(cores) else ...[
+        if (_transmitindo)
+          _cartaoEndereco(cores)
+        else ...[
           _cartaoAcesso(),
           const SizedBox(height: 16),
           _cartaoImagem(),
@@ -375,13 +389,16 @@ class _HomePageState extends State<HomePage>
                     style: Theme.of(context).textTheme.titleLarge,
                   ),
                   Text(
-                    _ip == null ? 'Sem rede Wi-Fi detectada' : 'Rede local: $_ip',
+                    _ip == null
+                        ? 'Sem rede Wi-Fi detectada'
+                        : 'Rede local: $_ip',
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),
                   if (_transmitindo && _modoTela)
                     Row(
                       children: [
-                        Icon(_audioAtivo ? Icons.volume_up : Icons.volume_off, size: 16),
+                        Icon(_audioAtivo ? Icons.volume_up : Icons.volume_off,
+                            size: 16),
                         const SizedBox(width: 4),
                         Text(_audioAtivo ? 'Áudio ativo' : 'Sem áudio'),
                       ],
@@ -413,7 +430,8 @@ class _HomePageState extends State<HomePage>
             const SizedBox(height: 16),
             const Text('2. Digite este PIN quando a TV pedir:'),
             const SizedBox(height: 8),
-            SelectableText(_pinCtrl.text, style: destaque?.copyWith(letterSpacing: 6)),
+            SelectableText(_pinCtrl.text,
+                style: destaque?.copyWith(letterSpacing: 6)),
             const SizedBox(height: 8),
             TextButton.icon(
               onPressed: () {
@@ -473,7 +491,8 @@ class _HomePageState extends State<HomePage>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Espelhamento', style: Theme.of(context).textTheme.titleMedium),
+            Text('Espelhamento',
+                style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 8),
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
@@ -482,7 +501,8 @@ class _HomePageState extends State<HomePage>
                   ? 'Captura o som interno do celular'
                   : 'Precisa do Android 10 ou superior'),
               value: _audio && _audioSuportado,
-              onChanged: _audioSuportado ? (v) => setState(() => _audio = v) : null,
+              onChanged:
+                  _audioSuportado ? (v) => setState(() => _audio = v) : null,
             ),
             const Divider(height: 24),
             Text('Qualidade: ${_qualidade.round()}%'),
@@ -527,9 +547,11 @@ class _HomePageState extends State<HomePage>
             const SizedBox(height: 12),
             const Text('1. Conecte o celular e a TV na mesma rede Wi-Fi.'),
             const SizedBox(height: 6),
-            const Text('2. Toque em "Iniciar espelhamento" e permita a captura.'),
+            const Text(
+                '2. Toque em "Iniciar espelhamento" e permita a captura.'),
             const SizedBox(height: 6),
-            const Text('3. Na TV, abra o navegador e digite o endereço mostrado.'),
+            const Text(
+                '3. Na TV, abra o navegador e digite o endereço mostrado.'),
             const SizedBox(height: 6),
             const Text('4. Digite o PIN na TV e escolha o que ver.'),
           ],
@@ -567,8 +589,10 @@ class _HomePageState extends State<HomePage>
             ),
             if (copiando) ...[
               const SizedBox(height: 16),
-              Text('Copiando ${_copia!['index']} de ${_copia!['total']}: ${_copia!['name']}',
-                  maxLines: 2, overflow: TextOverflow.ellipsis),
+              Text(
+                  'Copiando ${_copia!['index']} de ${_copia!['total']}: ${_copia!['name']}',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis),
               const SizedBox(height: 8),
               LinearProgressIndicator(value: fracao),
               const SizedBox(height: 4),
@@ -592,7 +616,8 @@ class _HomePageState extends State<HomePage>
               ListTile(
                 contentPadding: EdgeInsets.zero,
                 leading: const Icon(Icons.movie_outlined),
-                title: Text(f['name'] as String, maxLines: 2, overflow: TextOverflow.ellipsis),
+                title: Text(f['name'] as String,
+                    maxLines: 2, overflow: TextOverflow.ellipsis),
                 subtitle: Text(_tamanho(f['size'] as num)),
                 trailing: IconButton(
                   tooltip: 'Excluir',
